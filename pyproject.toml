@@ -1,6 +1,6 @@
 [project]
 name = "bedrock-quota"
-version = "0.1.0"
+version = "1.0.0"
 description = "A CLI-based dashboard to see your AWS Bedrock model quotas and usage."
 readme = "README.md"
 requires-python = ">=3.11"
