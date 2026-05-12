@@ -9,6 +9,7 @@ A CLI-based dashboard to see your AWS Bedrock model quotas and usage.
 [![Downloads](https://static.pepy.tech/badge/bedrock-quota/month)](https://pepy.tech/project/bedrock-quota)
 
 ![Main dashboard](.github/assets/dashboard-list.png)
+![Detail — 7 days](.github/assets/dashboard-detail-7d.png)
 
 The AWS console shows quota limits on one page and CloudWatch usage on another — nothing joins them per model. `bedrock-quota` pulls both and shows headroom per model, per region, so you know where you stand before you scale. Read-only, no dashboard to maintain.
 
@@ -79,7 +80,6 @@ Most developers already have enough read-only access through their SSO or dev IA
 Press `Enter` on any row to open a per-model detail screen with stats (P50/P90/Avg/Max for TPD, RPM, TPM, latency), token charts, an hourly heatmap, and a per-inference-profile breakdown — for time periods Last 24h, Today, 7d, 14d, 30d, This Month, Last Month.
 
 ![Detail — last 24h](.github/assets/dashboard-detail-24h.png)
-![Detail — 7 days](.github/assets/dashboard-detail-7d.png)
 
 ## Troubleshooting
 
