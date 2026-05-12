@@ -169,7 +169,8 @@ class CloudWatchService:
             return self._tpd_cache[cache_key]
 
         now = datetime.now(timezone.utc)
-        start = now - timedelta(days=7)
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = midnight - timedelta(days=7)
         cw = self.client.cloudwatch
 
         by_day: dict = {}
