@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-05-12)
+
+### Bug Fixes
+
+- Replace broken pepy.tech downloads badge with shields.io
+  ([`b0eb8b5`](https://github.com/Kelet-ai/bedrock-quota/commit/b0eb8b53a7285d150c1b50bcac652d57196ffd38))
+
+
 ## v1.1.0 (2026-05-12)
 
 ### Bug Fixes
