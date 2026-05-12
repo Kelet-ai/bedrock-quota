@@ -15,6 +15,7 @@ from .aws_client import AWSClient
 from .cloudwatch_service import CloudWatchService
 from .detail_screen import ModelDetailScreen
 from .models import ModelMetrics, Scope
+from .pricing_service import PricingReady, PricingService
 from .provider_screen import ProviderScreen
 from .quota_service import QuotaService, format_number
 from .region_screen import RegionScreen
@@ -104,6 +105,7 @@ class BedrockTUI(App):
         self._spinner_frame: int = 0
         # Provider display names populated from API (providerName field)
         self._provider_display: dict[str, str] = {}
+        self._pricing = PricingService(self._default_aws_client)
 
     def _services_for(self, region: str) -> tuple[AWSClient, QuotaService, CloudWatchService]:
         if region not in self._region_services:
@@ -133,6 +135,7 @@ class BedrockTUI(App):
             exclusive=False,
             name=f"load-{default_region}",
         )
+        self.run_worker(self._load_pricing(), exclusive=False, name="load-pricing")
 
     def _setup_table(self, table: DataTable) -> None:
         table.add_column("Provider / Region", key="region", width=28)
@@ -363,11 +366,23 @@ class BedrockTUI(App):
                 f"[bold]{self._provider_display.get(p, p.title())}[/bold]" for p in providers
             )
             total = len(self.all_metrics)
-            status.update(
+            if self._pricing.fetch_failed():
+                pricing_note = "[dim]Pricing unavailable — grant pricing:GetProducts to show $ values[/dim]"
+            elif self._pricing.is_ready():
+                pricing_note = "[dim]List prices · excludes Savings Plans and batch-inference discounts[/dim]"
+            else:
+                pricing_note = ""
+            lines = (
                 f"{total} models · {region_str} · {provider_str} · "
                 f"[bold]Enter[/bold] details · [bold]r[/bold] refresh · "
                 f"[bold]g[/bold] region · [bold]p[/bold] provider"
             )
+            status.update(lines + ("\n" + pricing_note if pricing_note else ""))
+
+    async def _load_pricing(self) -> None:
+        await self._pricing.fetch()
+        self._refresh_status()
+        self.post_message(PricingReady())
 
     async def _load_region(self, region: str, include_global: bool = False) -> None:
         table = self.query_one("#quota-table", DataTable)
@@ -426,6 +441,8 @@ class BedrockTUI(App):
             )
             table.loading = False
             self._repopulate_table()
+            if self.screen.focused is None:
+                table.focus()
 
             # Phase 2: discover real CloudWatch model IDs
             _set_phase(f"{region}: mapping model IDs…")
@@ -498,5 +515,9 @@ class BedrockTUI(App):
         )
 
         await self.push_screen(
-            ModelDetailScreen(model=selected_metric, cloudwatch_service=cw_svc)
+            ModelDetailScreen(
+                model=selected_metric,
+                cloudwatch_service=cw_svc,
+                pricing_service=self._pricing,
+            )
         )

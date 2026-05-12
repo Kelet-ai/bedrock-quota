@@ -12,6 +12,7 @@ from textual_plotext import PlotextPlot
 
 from .cloudwatch_service import CloudWatchService
 from .models import ModelMetrics, TimePeriod, UsageMetrics
+from .pricing_service import PricingReady, PricingService, format_cost
 from .quota_service import format_number
 from .time_periods import get_time_range
 
@@ -34,6 +35,7 @@ _LABEL_BY_PERIOD: dict[TimePeriod, str] = {p: lbl for p, lbl in _PERIODS}
 _SHORT_WINDOWS: frozenset[TimePeriod] = frozenset({TimePeriod.HOURS_24, TimePeriod.TODAY})
 
 # Row definitions: (metric_group_label, stat_label, field_name, quota_attr_on_QuotaLimits | None)
+# field_name starting with "$" means it's a computed cost row, not a UsageMetrics attribute.
 _ROWS: list[tuple[str, str, str, str | None]] = [
     ("Tokens / Day",    "P50",   "tpd_p50",             "tpd"),
     ("",                "P90",   "tpd_p90",             "tpd"),
@@ -60,6 +62,10 @@ _ROWS: list[tuple[str, str, str, str | None]] = [
     ("Output Tokens",   "Total", "output_tokens_total", None),
     ("",                "TPM",   "output_tpm_avg",      None),
     ("",                "",      "",                    None),
+    ("Cost (list $)",   "Input", "$cost_input",         None),
+    ("",                "Output","$cost_output",        None),
+    ("",                "Total", "$cost_total",         None),
+    ("",                "",      "",                    None),
     ("Throttles",       "Total", "throttles_total",     None),
     ("Client Errors",   "Total", "client_errors_total", None),
     ("Server Errors",   "Total", "server_errors_total", None),
@@ -75,6 +81,12 @@ def _fmt_cell(val: float, warn: bool = False) -> Text:
     return t
 
 
+def _fmt_cost_cell(usd: float | None) -> Text:
+    if usd is None:
+        return Text("-", style="dim")
+    return Text(format_cost(usd))
+
+
 class ModelDetailScreen(Screen):
     CSS_PATH = "detail.tcss"
 
@@ -83,10 +95,18 @@ class ModelDetailScreen(Screen):
         Binding("r", "refresh_data", "Refresh"),
     ]
 
-    def __init__(self, model: ModelMetrics, cloudwatch_service: CloudWatchService, *args, **kwargs):
+    def __init__(
+        self,
+        model: ModelMetrics,
+        cloudwatch_service: CloudWatchService,
+        pricing_service: PricingService | None = None,
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.model = model
         self.cw_svc = cloudwatch_service
+        self._pricing = pricing_service
         self._results: dict[TimePeriod, UsageMetrics | None] = {}
 
     def _header_text(self) -> Text:
@@ -125,6 +145,7 @@ class ModelDetailScreen(Screen):
         yield Static(self._header_text(), id="detail-header")
         yield PlotextPlot(id="chart-daily")
         yield PlotextPlot(id="chart-hourly")
+        yield Static("", id="chart-heatmap")
         with TabbedContent(id="detail-tabs"):
             for period, label in _PERIODS:
                 with TabPane(label, id=f"tab-{period.value}"):
@@ -180,7 +201,9 @@ class ModelDetailScreen(Screen):
     # ── visibility ────────────────────────────────────────────────────────────
 
     def _set_chart_visibility(self, period: TimePeriod) -> None:
-        self.query_one("#chart-hourly", PlotextPlot).display = period not in _SHORT_WINDOWS
+        is_short = period in _SHORT_WINDOWS
+        self.query_one("#chart-hourly", PlotextPlot).display = not is_short
+        self.query_one("#chart-heatmap", Static).display = not is_short
 
     # ── daily chart (top) ─────────────────────────────────────────────────────
 
@@ -290,7 +313,6 @@ class ModelDetailScreen(Screen):
                 w.plt.title(f"Avg tokens / hour  ·  {label}  (no usage data)")
                 w.refresh()
                 return
-            slots_per_hour = 1
             all_slots = list(range(24))
             avgs = [sum(by_slot.get(h, [0.0])) / max(len(by_slot.get(h, [0.0])), 1) for h in all_slots]
             labels_x = [f"{h:02d}" for h in all_slots]
@@ -320,6 +342,122 @@ class ModelDetailScreen(Screen):
         w.plt.xlabel(xlabel)
         w.refresh()
 
+    # ── heatmap (day × hour, multi-day only, rendered with Rich block chars) ──
+
+    # 5 activity levels (0 = none, 1–4 = low→high), thresholds as fractions of max
+    _LEVEL_THRESHOLDS = (0.0, 0.15, 0.40, 0.70, 1.01)  # upper bound for each level
+
+    def _heatmap_palette(self) -> list[tuple[int,int,int]]:
+        """Return 5 RGB colors: level 0 (none) → level 4 (max), from theme."""
+        from textual.color import Color
+        try:
+            css_vars = self.app.get_css_variables()
+            lo = Color.parse(css_vars.get("surface", "#14141e"))
+            hi = Color.parse(css_vars.get("accent", "#00c8ff"))
+        except Exception:
+            lo = Color.parse("#14141e")
+            hi = Color.parse("#00c8ff")
+        return [
+            (lo.r, lo.g, lo.b),
+            (
+                int(lo.r + 0.25 * (hi.r - lo.r)),
+                int(lo.g + 0.25 * (hi.g - lo.g)),
+                int(lo.b + 0.25 * (hi.b - lo.b)),
+            ),
+            (
+                int(lo.r + 0.50 * (hi.r - lo.r)),
+                int(lo.g + 0.50 * (hi.g - lo.g)),
+                int(lo.b + 0.50 * (hi.b - lo.b)),
+            ),
+            (
+                int(lo.r + 0.75 * (hi.r - lo.r)),
+                int(lo.g + 0.75 * (hi.g - lo.g)),
+                int(lo.b + 0.75 * (hi.b - lo.b)),
+            ),
+            (hi.r, hi.g, hi.b),
+        ]
+
+    @staticmethod
+    def _heatmap_level(val: float, max_val: float) -> int:
+        if val <= 0 or max_val <= 0:
+            return 0
+        t = val / max_val
+        for level, upper in enumerate(ModelDetailScreen._LEVEL_THRESHOLDS):
+            if t < upper:
+                return level
+        return 4
+
+    def _heatmap_markup(
+        self,
+        by_day_hour: dict,
+        sorted_days: list,
+        max_val: float,
+        palette: list[tuple[int,int,int]],
+    ) -> str:
+        """Build Rich markup: one row per day, 24 ██ blocks per row, with a date label."""
+        label_width = 6
+        lines: list[str] = []
+
+        # Header: hour labels every 3 hours
+        hour_header = " " * label_width
+        for h in range(24):
+            hour_header += f"{h:02d} " if h % 3 == 0 else "   "
+        lines.append(f"[dim]{hour_header}[/dim]")
+
+        for dk in sorted_days:
+            date_str = datetime(*dk).strftime("%-m/%-d").ljust(label_width)
+            row = f"[dim]{date_str}[/dim]"
+            for hour in range(24):
+                val = by_day_hour.get((dk, hour), 0.0)
+                r, g, b = palette[self._heatmap_level(val, max_val)]
+                row += f"[rgb({r},{g},{b})]██[/rgb({r},{g},{b})]"
+            lines.append(row)
+
+        # Legend: 5 swatches with labels
+        legend = " " * label_width + "[dim]less  [/dim]"
+        for r, g, b in palette:
+            legend += f"[rgb({r},{g},{b})]██[/rgb({r},{g},{b})]"
+        legend += f"[dim]  more  (max {format_number(max_val)} TPM)[/dim]"
+        lines.append("")
+        lines.append(legend)
+
+        return "\n".join(lines)
+
+    def _draw_heatmap_placeholder(self, label: str) -> None:
+        w = self.query_one("#chart-heatmap", Static)
+        w.update(f"[dim]Token activity  ·  {label}  (loading…)[/dim]")
+
+    def _draw_heatmap_no_data(self, label: str) -> None:
+        w = self.query_one("#chart-heatmap", Static)
+        w.update(f"[dim]Token activity  ·  {label}  (no usage data)[/dim]")
+
+    def _draw_heatmap(self, series: list, label: str) -> None:
+        w = self.query_one("#chart-heatmap", Static)
+
+        if not series:
+            w.update(f"[dim]Token activity  ·  {label}  (no usage data)[/dim]")
+            return
+
+        by_day_hour: dict[tuple, float] = {}
+        day_keys: set[tuple] = set()
+        for ts, tpm in series:
+            dk = (ts.year, ts.month, ts.day)
+            day_keys.add(dk)
+            key = (dk, ts.hour)
+            by_day_hour[key] = by_day_hour.get(key, 0.0) + tpm
+
+        sorted_days = sorted(day_keys)
+        if not sorted_days:
+            w.update(f"[dim]Token activity  ·  {label}  (no usage data)[/dim]")
+            return
+
+        max_val = max(by_day_hour.values(), default=1.0) or 1.0
+        palette = self._heatmap_palette()
+
+        title = f"[bold]Token activity  ·  {label}[/bold]"
+        body = self._heatmap_markup(by_day_hour, sorted_days, max_val, palette)
+        w.update(title + "\n" + body)
+
     # ── unified redraw ────────────────────────────────────────────────────────
 
     def _redraw_charts_for(self, period: TimePeriod) -> None:
@@ -330,6 +468,7 @@ class ModelDetailScreen(Screen):
             self._draw_daily_placeholder(label)
             if period not in _SHORT_WINDOWS:
                 self._draw_hourly_placeholder(label)
+                self._draw_heatmap_placeholder(label)
             return
 
         result = self._results[period]
@@ -347,18 +486,51 @@ class ModelDetailScreen(Screen):
         if period not in _SHORT_WINDOWS:
             if result and result.tpm_series:
                 self._draw_hourly_chart(result.tpm_series, label, cp)
+                self._draw_heatmap(result.tpm_series, label)
             else:
                 self._draw_hourly_no_data(label)
+                self._draw_heatmap_no_data(label)
 
     # ── table update ──────────────────────────────────────────────────────────
+
+    def _compute_costs(self, result: UsageMetrics) -> tuple[float | None, float | None, float | None]:
+        """Return (cost_input, cost_output, cost_total) or (None, None, None) if price unknown."""
+        if self._pricing is None or not self._pricing.is_ready():
+            return None, None, None
+        region = self.model.region if self.model.region != "global" else ""
+        price = self._pricing.get(self.model.model_id, region)
+        if price is None:
+            return None, None, None
+        cost_in = result.input_tokens_total / 1000.0 * price.input_per_1k
+        cost_out = result.output_tokens_total / 1000.0 * price.output_per_1k
+        return cost_in, cost_out, cost_in + cost_out
 
     def _update_tab(self, period: TimePeriod, result: UsageMetrics | None) -> None:
         table = self.query_one(f"#table-{period.value}", DataTable)
         table.loading = False
         lim = self.model.limits
 
+        cost_in, cost_out, cost_total = (
+            self._compute_costs(result) if result is not None else (None, None, None)
+        )
+
         for _, _, field_name, quota_attr in _ROWS:
             if not field_name:
+                continue
+
+            # Cost rows — computed separately
+            if field_name.startswith("$"):
+                if field_name == "$cost_input":
+                    cell = _fmt_cost_cell(cost_in)
+                elif field_name == "$cost_output":
+                    cell = _fmt_cost_cell(cost_out)
+                else:
+                    cell = _fmt_cost_cell(cost_total)
+                try:
+                    table.update_cell(field_name, "value", cell)
+                    table.update_cell(field_name, "quota_pct", Text(""))
+                except Exception:
+                    pass
                 continue
 
             quota_val: float | None = getattr(lim, quota_attr, None) if quota_attr else None
@@ -384,6 +556,33 @@ class ModelDetailScreen(Screen):
                 pass
 
     # ── event handlers ────────────────────────────────────────────────────────
+
+    def on_pricing_ready(self, _: PricingReady) -> None:
+        """Re-render cost cells for all periods that already have data."""
+        for period, _ in _PERIODS:
+            result = self._results.get(period)
+            if result is not None:
+                cost_in, cost_out, cost_total = self._compute_costs(result)
+                table = self.query_one(f"#table-{period.value}", DataTable)
+                for field_name, usd in (
+                    ("$cost_input", cost_in),
+                    ("$cost_output", cost_out),
+                    ("$cost_total", cost_total),
+                ):
+                    try:
+                        table.update_cell(field_name, "value", _fmt_cost_cell(usd))
+                    except Exception:
+                        pass
+
+    def on_app_theme_changed(self) -> None:
+        """Redraw the heatmap with the new theme's accent/surface colors."""
+        active = self.query_one("#detail-tabs", TabbedContent).active
+        period = _PERIOD_BY_ID.get(active or "")
+        if period is None or period in _SHORT_WINDOWS:
+            return
+        result = self._results.get(period)
+        if result and result.tpm_series:
+            self._draw_heatmap(result.tpm_series, _LABEL_BY_PERIOD[period])
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         pane_id = event.pane.id  # raw TabPane id, e.g. "tab-24h"

@@ -21,6 +21,7 @@ class AWSClient:
             self.aws_region = session.region_name or "us-east-1"
         self._cloudwatch = None
         self._service_quotas = None
+        self._pricing = None
 
     def get_client(self, service: str, **kwargs: Any) -> Any:
         """Create boto3 client with proper credential handling."""
@@ -55,3 +56,9 @@ class AWSClient:
         if self._cloudwatch is None:
             self._cloudwatch = self.get_client("cloudwatch")
         return self._cloudwatch
+
+    @property
+    def pricing(self):
+        if self._pricing is None:
+            self._pricing = self.get_client("pricing", region_name="us-east-1")
+        return self._pricing

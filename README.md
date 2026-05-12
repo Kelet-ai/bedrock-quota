@@ -54,6 +54,7 @@ Most developers already have enough read-only access through their SSO or dev IA
         "bedrock:ListTagsForResource",
         "cloudwatch:GetMetricData",
         "cloudwatch:ListMetrics",
+        "pricing:GetProducts",
         "servicequotas:ListServiceQuotas"
       ],
       "Resource": "*"
@@ -88,7 +89,7 @@ Press `Enter` on any row to open a per-model detail screen with stats (P50/P90/A
 
 ## Implementation notes
 
-Usage data is queried from CloudWatch (`AWS/Bedrock` namespace, `ModelId` dimension): `InputTokenCount` + `OutputTokenCount` → TPM/TPD, `Invocations` → RPM, `InvocationLatency` → latency, `InvocationThrottles` / `InvocationClientErrors` / `InvocationServerErrors` → error counts. Quotas come from AWS Service Quotas. Model IDs are discovered from `ListFoundationModels`, `ListInferenceProfiles`, and observed CloudWatch dimensions, so cross-region variants like `us.anthropic.claude-sonnet-4-6` match their quota automatically.
+Usage data is queried from CloudWatch (`AWS/Bedrock` namespace, `ModelId` dimension): `InputTokenCount` + `OutputTokenCount` → TPM/TPD, `Invocations` → RPM, `InvocationLatency` → latency, `InvocationThrottles` / `InvocationClientErrors` / `InvocationServerErrors` → error counts. Quotas come from AWS Service Quotas. Model IDs are discovered from `ListFoundationModels`, `ListInferenceProfiles`, and observed CloudWatch dimensions, so cross-region variants like `us.anthropic.claude-sonnet-4-6` match their quota automatically. Per-token costs shown in the detail screen are list prices from the AWS Pricing API (`pricing:GetProducts`); they exclude Savings Plans and batch-inference discounts. If `pricing:GetProducts` is not granted, cost rows render `—` and the status bar shows a note.
 
 ## Development
 
