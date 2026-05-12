@@ -1,0 +1,34 @@
+ModelDetailScreen {
+    background: $background;
+}
+
+#detail-header {
+    dock: top;
+    height: 5;
+    padding: 0 2;
+    background: $panel;
+    border-bottom: tall $background;
+    color: $text;
+    content-align: left middle;
+}
+
+#chart-daily {
+    height: 12;
+    border-bottom: tall $background;
+    background: $surface;
+}
+
+#chart-hourly {
+    height: 12;
+    border-bottom: tall $background;
+    background: $surface;
+}
+
+#detail-tabs {
+    height: 1fr;
+}
+
+#detail-tabs DataTable {
+    height: 1fr;
+    background: $background;
+}
