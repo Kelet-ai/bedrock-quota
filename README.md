@@ -6,7 +6,7 @@ A CLI-based dashboard to see your AWS Bedrock model quotas and usage.
 [![Python](https://img.shields.io/pypi/pyversions/bedrock-quota.svg)](https://pypi.org/project/bedrock-quota/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/actions/workflow/status/Kelet-ai/bedrock-quota/release.yml?branch=master)](https://github.com/Kelet-ai/bedrock-quota/actions/workflows/release.yml)
-[![Downloads](https://static.pepy.tech/badge/bedrock-quota/month)](https://pepy.tech/project/bedrock-quota)
+[![Downloads](https://img.shields.io/pypi/dm/bedrock-quota)](https://pypi.org/project/bedrock-quota/)
 
 ![Main dashboard](.github/assets/dashboard-list.png)
 ![Detail — 7 days](.github/assets/dashboard-detail-7d.png)
